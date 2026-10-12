@@ -129,12 +129,25 @@
       .card:active { transform: scale(.99); }
     }
 
+    /* ---------- Web suggestions (shown only when nothing in the list matches) ---------- */
+    .web-label {
+      margin: 8px 2px -2px;
+      font-size: .85rem;
+      font-weight: 600;
+      letter-spacing: .02em;
+      color: var(--muted);
+    }
+    .card.suggestion { min-height: 60px; padding: 14px 18px 14px 22px; }
+    .card.suggestion .name { font-size: 1.02rem; font-weight: 500; }
+    .card.web-main .name { font-size: 1.12rem; }
+
     .empty { max-width: 46ch; padding: 22px 2px; color: var(--muted); line-height: 1.5; }
     .empty code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; color: var(--text); }
 
     @media (min-width: 720px) {
       body { padding-top: max(56px, env(safe-area-inset-top)); }
       .card { padding: 20px 22px 20px 26px; }
+      .card.suggestion { padding: 16px 22px 16px 26px; }
     }
     @media (prefers-reduced-motion: reduce) {
       .card { transition: none; }
@@ -171,15 +184,9 @@
     const PAGE_TITLE = "NKT Tools";
 
     const PROJECTS = [
-       { name: "Spends tracker",  link: "https://anktsngh48.github.io/nkt-kharche/",  note: "Log what you spend and see where it goes" },
-      { name: "Collage maker",  link: "https://anktsngh48.github.io/nkt-collage/",  note: "Creates collage from photos" },
-      { name: "Video maker",  link: "https://anktsngh48.github.io/nkt-collagevideo/",  note: "Create and edit videos, add images and text" },
-      { name: "Create video status",  link: "https://anktsngh48.github.io/nkt-status-video/", note: "Add your photo and name in video. Can also add text on top" },
-      { name: "YT Thumbnail maker",  link: "https://anktsngh48.github.io/nkt-thumbnail/", note: "Thumbnails for YT videos and Shorts" },
-      { name: "Resume Builder",  link: "https://anktsngh48.github.io/nkt-resume/", note: "Build resume and export as PDF" },
-      { name: "Watch movies",  link: "https://anktsngh48.github.io/nkt-movies/", note: "Search and watch movies from a list" },
-      { name: "Edit Google sheet",  link: "https://anktsngh48.github.io/nkt-edit-sheet/", note: "Basic sheet edits on the go" },
-      { name: "Test",  link: "https://anktsngh48.github.io/nkt-test/" },,
+       { name: "Spends tracker",  link: "https://asasasasasas.com",  note: "Log what you spend and see where it goes" },
+      { name: "Collage maker",  link: "lage/",  note: "Creates collage from photos" },
+      { name: "Video maker",  link: "https://eg.com/",  note: "Create and edit videos, add images and text" },
     ];
     /* ===================================================================== */
 
@@ -258,22 +265,118 @@
       return div;
     }
 
+    /* =====================================================================
+       DuckDuckGo fallback
+       When the typed text matches nothing in PROJECTS, the page switches to
+       web-search mode: it shows DuckDuckGo's live suggestions, and tapping
+       one (or pressing Enter) opens DuckDuckGo with that search.
+       ===================================================================== */
+    const DDG_SEARCH = "https://duckduckgo.com/?q=";
+    const DDG_SUGGEST = "https://duckduckgo.com/ac/?q=";
+    const SUGGEST_DELAY = 180;   // ms to wait after the last keystroke before asking DuckDuckGo
+    const SUGGEST_TIMEOUT = 4000; // ms before giving up on a slow connection
+    const MAX_SUGGESTIONS = 8;
+
+    const suggestCache = new Map();
+    let suggestTimer = 0;
+    let suggestRun = 0; // bumps on every change, so late answers for old text are ignored
+
+    function ddgUrl(q) { return DDG_SEARCH + encodeURIComponent(q); }
+
+    function makeWebCard(label, q, extraClass, slot) {
+      const card = makeCard({ name: label, link: ddgUrl(q), note: "", slot });
+      card.classList.add(extraClass);
+      return card;
+    }
+
+    // Asks DuckDuckGo for suggestions. Tries a normal request first, then falls back to a script tag (JSONP).
+    function fetchSuggestions(q) {
+      return fetchJson(q).catch(() => fetchJsonp(q));
+    }
+
+    function parseSuggestions(data) {
+      if (!Array.isArray(data)) return [];
+      return data
+        .map(item => (item && typeof item.phrase === "string") ? item.phrase.trim() : "")
+        .filter(Boolean)
+        .slice(0, MAX_SUGGESTIONS);
+    }
+
+    function fetchJson(q) {
+      const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+      const timer = setTimeout(() => ctrl && ctrl.abort(), SUGGEST_TIMEOUT);
+      return fetch(DDG_SUGGEST + encodeURIComponent(q), ctrl ? { signal: ctrl.signal } : undefined)
+        .then(r => { if (!r.ok) throw new Error("bad response"); return r.json(); })
+        .then(parseSuggestions)
+        .finally(() => clearTimeout(timer));
+    }
+
+    function fetchJsonp(q) {
+      return new Promise((resolve, reject) => {
+        const cb = "ddg_cb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+        const script = document.createElement("script");
+        const done = () => { clearTimeout(timer); delete window[cb]; script.remove(); };
+        const timer = setTimeout(() => { done(); reject(new Error("timeout")); }, SUGGEST_TIMEOUT);
+        window[cb] = data => { done(); resolve(parseSuggestions(data)); };
+        script.onerror = () => { done(); reject(new Error("blocked")); };
+        script.src = DDG_SUGGEST + encodeURIComponent(q) + "&callback=" + cb;
+        document.head.append(script);
+      });
+    }
+
+    function renderWeb(q) {
+      list.replaceChildren();
+      count.textContent = "Nothing in your projects. Searching the web instead.";
+
+      // Always available: search for exactly what was typed
+      list.append(makeWebCard(`Search DuckDuckGo for “${q}”`, q, "web-main", 1));
+
+      const holder = document.createElement("div");
+      holder.className = "list";
+      list.append(holder);
+
+      const paint = suggestions => {
+        const fresh = suggestions.filter(s => s.toLowerCase() !== q.toLowerCase());
+        holder.replaceChildren();
+        if (!fresh.length) return;
+        const label = document.createElement("div");
+        label.className = "web-label";
+        label.textContent = "DuckDuckGo suggestions";
+        holder.append(label);
+        fresh.forEach((s, i) => holder.append(makeWebCard(s, s, "suggestion", (i + 2) % PALETTE_SIZE)));
+      };
+
+      if (suggestCache.has(q)) { paint(suggestCache.get(q)); return; }
+
+      const run = ++suggestRun;
+      clearTimeout(suggestTimer);
+      suggestTimer = setTimeout(() => {
+        fetchSuggestions(q)
+          .then(s => {
+            suggestCache.set(q, s);
+            if (run === suggestRun) paint(s); // ignore answers for text that has since changed
+          })
+          .catch(() => { /* offline or blocked: the "Search DuckDuckGo for …" card still works */ });
+      }, SUGGEST_DELAY);
+    }
+
     function render() {
       const q = search.value.trim().toLowerCase();
       const shown = q
         ? projects.filter(p => (p.name + " " + p.note).toLowerCase().includes(q))
         : projects;
 
+      suggestRun++;               // cancels any suggestion request still on its way
+      clearTimeout(suggestTimer);
       list.replaceChildren();
 
-      if (!projects.length) {
+      if (!projects.length && !q) {
         count.textContent = "";
         list.append(emptyMessage("No projects yet. Add your first one in the list called", "PROJECTS"));
         return;
       }
       if (!shown.length) {
-        count.textContent = `0 of ${projects.length} projects`;
-        list.append(emptyMessage(`No project matches “${search.value.trim()}”. Clear the search to see all of them.`));
+        renderWeb(search.value.trim()); // nothing matches in the list, so act as a DuckDuckGo search bar
         return;
       }
       count.textContent = q
@@ -283,6 +386,17 @@
     }
 
     search.addEventListener("input", render);
+
+    // Enter searches DuckDuckGo, but only when nothing in the list matches
+    search.addEventListener("keydown", e => {
+      if (e.key !== "Enter") return;
+      const raw = search.value.trim();
+      const q = raw.toLowerCase();
+      if (!q) return;
+      const hasMatch = projects.some(p => (p.name + " " + p.note).toLowerCase().includes(q));
+      if (!hasMatch) window.location.href = ddgUrl(raw);
+    });
+
     render();
   </script>
 </body>
