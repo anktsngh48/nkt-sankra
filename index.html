@@ -324,6 +324,36 @@
       });
     }
 
+    /* =====================================================================
+       Website addresses
+       If what's typed or pasted looks like a website (https://site.com/page,
+       www.site.com, site.in/path, localhost:3000), an "Open" card is shown
+       that goes straight to it. Only http and https addresses are accepted.
+       ===================================================================== */
+    const BARE_ADDRESS = new RegExp(
+      "^(?:" +
+        "(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}" + // site.com, www.site.co.in
+        "|localhost" +
+        "|\\d{1,3}(?:\\.\\d{1,3}){3}" +                       // 192.168.1.5
+      ")(?::\\d{2,5})?(?:[/?#]\\S*)?$", "i");
+
+    function parseWebAddress(raw) {
+      const text = String(raw || "").trim();
+      if (!text || /\s/.test(text)) return null;
+      const hasScheme = /^https?:\/\//i.test(text);
+      if (!hasScheme && !BARE_ADDRESS.test(text)) return null;
+      const local = /^(localhost|\d{1,3}(\.\d{1,3}){3})(?=[:/?#]|$)/i.test(text);
+      try {
+        const url = new URL(hasScheme ? text : (local ? "http://" : "https://") + text);
+        if (!/^https?:$/.test(url.protocol) || !url.hostname) return null;
+        return url.href;
+      } catch { return null; }
+    }
+
+    function prettyHost(href) {
+      try { return new URL(href).hostname.replace(/^www\./i, ""); } catch { return href; }
+    }
+
     function renderWeb(q) {
       list.replaceChildren();
       count.textContent = "Nothing in your projects. Searching the web instead.";
@@ -361,7 +391,9 @@
     }
 
     function render() {
-      const q = search.value.trim().toLowerCase();
+      const raw = search.value.trim();
+      const q = raw.toLowerCase();
+      const addr = parseWebAddress(raw);
       const shown = q
         ? projects.filter(p => (p.name + " " + p.note).toLowerCase().includes(q))
         : projects;
@@ -370,6 +402,16 @@
       clearTimeout(suggestTimer);
       list.replaceChildren();
 
+      if (addr) {
+        // A website address was typed or pasted: offer to open it directly
+        count.textContent = "That looks like a website address.";
+        const open = makeCard({ name: `Open ${prettyHost(addr)}`, link: addr, note: addr, slot: 1 });
+        open.classList.add("web-main");
+        list.append(open);
+        if (shown.length) list.append(...shown.map(makeCard)); // projects that also match still show
+        else list.append(makeWebCard(`Search DuckDuckGo for “${raw}” instead`, raw, "web-main", 3));
+        return;
+      }
       if (!projects.length && !q) {
         count.textContent = "";
         list.append(emptyMessage("No projects yet. Add your first one in the list called", "PROJECTS"));
@@ -393,6 +435,8 @@
       const raw = search.value.trim();
       const q = raw.toLowerCase();
       if (!q) return;
+      const addr = parseWebAddress(raw);
+      if (addr) { window.location.href = addr; return; } // a pasted website opens directly
       const hasMatch = projects.some(p => (p.name + " " + p.note).toLowerCase().includes(q));
       if (!hasMatch) window.location.href = ddgUrl(raw);
     });
